@@ -1,13 +1,20 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Configuration;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
+using System.Timers;
 using System.Xml;
 
 namespace Total.WinFCU
 {
     public partial class fcu
     {
+        // Service related constants
+        public static EventLog evtLog             = null;
+        public static bool  EventLogInitialized   = false;
+        public const string EventLogName          = "Application";
+
         // application configuration file
         public static Configuration appConfig;
 
@@ -21,19 +28,21 @@ namespace Total.WinFCU
         public static long  folder_bytesMoved,     total_bytesMoved = 0;
 
         // RunOptions stuff
-        public static bool         runHasSchedule         { get { return run_HasSchedule; }         set { run_HasSchedule = value; } }        private static bool         run_HasSchedule;
-        public static string       runLogFile             { get { return run_LogFile; }             set { run_LogFile = value; } }            private static string       run_LogFile;
-        public static string       runConfig              { get { return run_Config; }              set { run_Config = value; } }             private static string       run_Config;
-        public static List<String> incConfig              { get { return inc_Config; }              set { inc_Config = value; } }             private static List<String> inc_Config = new List<String>();
+        public static bool         runHasSchedule { get { return run_HasSchedule; } set { run_HasSchedule = value; } } private static bool         run_HasSchedule;
+        public static string       runLogFile     { get { return run_LogFile; }     set { run_LogFile = value; } }     private static string       run_LogFile;
+        public static string       runConfig      { get { return run_Config; }      set { run_Config = value; } }      private static string       run_Config;
+        public static List<String> incConfig      { get { return inc_Config; }      set { inc_Config = value; } }      private static List<String> inc_Config = new List<String>();
         // Security stuff
-        public static string       secAccount             { get { return sec_account; }             set { sec_account = value; } }            private static string       sec_account;
-        public static string       secPassword            { get { return sec_password; }            set { sec_password = value; } }           private static string       sec_password;
-        public static string       secCredentials         { get { return sec_credentials; }         set { sec_credentials = value; } }        private static string       sec_credentials;
+        public static string       secAccount     { get { return sec_account; }     set { sec_account = value; } }     private static string       sec_account;
+        public static string       secPassword    { get { return sec_password; }    set { sec_password = value; } }    private static string       sec_password;
+        public static string       secCredentials { get { return sec_credentials; } set { sec_credentials = value; } } private static string       sec_credentials;
         // xml config stuff
-        public static XmlDocument  fcuConfig              { get { return fcu_config; }              set { fcu_config = value; } }             private static XmlDocument  fcu_config;
-        public static XmlNodeList  fcuFolders             { get { return fcu_folders; }             set { fcu_folders = value; } }            private static XmlNodeList  fcu_folders;
+        public static XmlDocument  fcuConfig      { get { return fcu_config; }      set { fcu_config = value; } }      private static XmlDocument  fcu_config;
+        public static XmlNodeList  fcuFolders     { get { return fcu_folders; }     set { fcu_folders = value; } }     private static XmlNodeList  fcu_folders;
         // restricted paths
         public static List<string> restrictedPaths = new List<string>();
+        // include paths
+        public static List<string> includePaths    = new List<string>();
 
         public struct scanAttributes
         {
@@ -47,9 +56,11 @@ namespace Total.WinFCU
             public string fileAge;                       // Inheritable
             public string actionName;                    // Not Inheritable
             public string actionTarget;                  // Not Inheritable
+            public string archivePath;                   // Inheritable
             public Regex  systemName;                    // Inheritable
-            public Regex  excludeFromScan;               // Not Inheritable
+            public Regex  excludeFromScan;               // Inheritable
         }
+
         public struct INF
         {
             public static int      fileDirCount = 0;
@@ -70,6 +81,10 @@ namespace Total.WinFCU
             public static string   accessMonth;
             public static string   accessYear;
         }
+
+        // timer/fsw stuff
+        public static Timer  fcuTimer = null;
+        public static Object fcuSchedule = null;
 
     }
 }

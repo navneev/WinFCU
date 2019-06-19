@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Text.RegularExpressions;
 using Total.Util;
 
 namespace Total.WinFCU
@@ -11,7 +12,7 @@ namespace Total.WinFCU
         // ------------------------------------------------------------------------------------------------------------------------
         //   Delete all folders in the give path
         // ------------------------------------------------------------------------------------------------------------------------
-        public static void DeleteEmptyFolders(string scanPath, SearchOption recursiveScan)
+        public static void DeleteEmptyFolders(string scanPath, Regex excludeFolder, SearchOption recursiveScan)
         {
             string[] allFolders = null;
             total.Logger.Info("Removing empty folders in " + scanPath);
@@ -28,35 +29,44 @@ namespace Total.WinFCU
             Array.Sort(allFolders, (x, y) => y.Length.CompareTo(x.Length));
             foreach (string pathName in allFolders)
             {
+                if (excludeFolder.Match(pathName).Success) { total.Logger.Info("Excluding path: " + pathName); continue; }
                 bool dirDeleted = true;
                 DirectoryInfo dirInfo = new DirectoryInfo(pathName);
-                try { dirInfo.Delete(false); }
-                catch (System.IO.IOException) { dirDeleted = false; }
-                if (dirDeleted) { total.Logger.Debug("Removed folder " + pathName); }
+                if (total.APP.Dryrun) { total.Logger.Debug(" [DRYRUN] - would remove folder: " + pathName); }
+                else
+                {
+                    try { dirInfo.Delete(false); }
+                    catch (System.IO.IOException) { dirDeleted = false; }
+                    if (dirDeleted) { total.Logger.Debug("Removed folder " + pathName); }
+                }
             }
         }
 
         // ------------------------------------------------------------------------------------------------------------------------
-        //   Delete all files in the specified FileInfo list
+        //   Delete all files in the specified FileInfo list (verify that file still exists! might be removed by external source)
         // ------------------------------------------------------------------------------------------------------------------------
         public static void DeleteFilesInList(List<FileInfo> fileList, scanAttributes fnAttr)
         {
-            folder_bytesDeleted = 0;
             foreach (FileInfo file in fileList)
             {
                 string fullName = file.FullName;
+                if (!File.Exists(fullName)) { continue; }
                 long fileSize   = file.Length;
                 if (total.APP.Dryrun) { total.Logger.Debug(" [DRYRUN] - would delete file: " + fullName + "  (" + fileSize + ")"); }
                 else
                 {
                     total.Logger.Debug("  delete file: " + fullName + "  (" + fileSize + ")");
-                    try { file.IsReadOnly = false; file.Delete(); }
-                    catch (UnauthorizedAccessException ex) { total.Logger.Warn(fullName + " - " + ex.Message); continue; }
-                    catch (IOException ex)                 { total.Logger.Warn(ex.Message); continue; }
-                    catch (Exception ex)                   { total.Logger.Warn(fullName + " - " + ex.Message); continue; }
-                    total.Logger.Info(" deleted file: " + fullName + "  (" + fileSize + ")");
+                    try
+                    {
+                        file.IsReadOnly = false;
+                        file.Delete();
+                        total.Logger.Info(" deleted file: " + fullName + "  (" + fileSize + ")");
+                        folder_bytesDeleted += fileSize;
+                    }
+                    catch (UnauthorizedAccessException ex) { total.Logger.Warn(fullName + " - " + ex.Message); }
+                    catch (IOException ex)                 { total.Logger.Warn(ex.Message); }
+                    catch (Exception ex)                   { total.Logger.Warn(fullName + " - " + ex.Message); }
                 }
-                folder_bytesDeleted += fileSize;
             }
             total_bytesDeleted += folder_bytesDeleted;
             if (total.APP.Dryrun) { total.Logger.Info(" [DRYRUN] - would have deleted " + folder_bytesDeleted + " bytes in folder " + INF.filePath); }
@@ -64,14 +74,13 @@ namespace Total.WinFCU
         }
 
         // ------------------------------------------------------------------------------------------------------------------------
-        //   Compact all files in the specified FileInfo list
+        //   Compact all files in the specified FileInfo list (verify that file still exists! might be removed by external source)
         // ------------------------------------------------------------------------------------------------------------------------
         public static void CompactFilesInList(List<FileInfo> fileList, scanAttributes fnAttr)
         {
-            folder_bytesCompacted = 0;
-            folder_CompationRatio = 0;
             foreach (FileInfo file in fileList)
             {
+                if (!File.Exists(file.FullName)) { continue; }
                 // ----------------------------------------------------------------------------------------------------------------
                 //   No use to comress when allready comressed.
                 // ----------------------------------------------------------------------------------------------------------------
@@ -102,10 +111,10 @@ namespace Total.WinFCU
         // ------------------------------------------------------------------------------------------------------------------------
         public static void MoveFilesInList(List<FileInfo> fileList, scanAttributes fnAttr)
         {
-            folder_bytesMoved = 0;
             int fpLength = INF.filePath.Length + 1;
             foreach (FileInfo file in fileList)
             {
+                if (!File.Exists(file.FullName)) { continue; }
                 // --------------------------------------------------------------------------------------------------------------------
                 //   Collect file info of the file to move
                 // --------------------------------------------------------------------------------------------------------------------
@@ -176,39 +185,46 @@ namespace Total.WinFCU
             //   Convert the input file list to a sorted list with the archive target as key, the value part of the sorted list
             //   holds all filenames for the archive target.
             // --------------------------------------------------------------------------------------------------------------------
-            long folder_bytesOriginal = 0; folder_bytesArchived = 0;
             decimal folder_ZipRatio = 0;
-            Dictionary<string, List<string>> archiveDictionary = new Dictionary<string, List<string>>();
+            SortedList<string, List<string>> archiveSet = new SortedList<string, List<string>>();
+            // --------------------------------------------------------------------------------------------------------------------
+            //  Process all files in the list
+            // --------------------------------------------------------------------------------------------------------------------
             foreach (FileInfo inFile in fileList)
             {
-                List<string> archiveList = new List<string>();
                 // ----------------------------------------------------------------------------------------------------------------
-                //   Update the INF structure with the data of the current file
+                //  In case of a relative archive location, the file determines the location/name of the archive
                 // ----------------------------------------------------------------------------------------------------------------
                 SetKeywordValues(inFile);
+                string archive = Path.GetFullPath(Path.Combine(inFile.DirectoryName, fcu.ReplaceKeyword(fnAttr.actionTarget)));
                 // ----------------------------------------------------------------------------------------------------------------
-                //   Determine the target drive, path and name.
+                //   Add the current file and its archive to the dictionary using the archivename as key
                 // ----------------------------------------------------------------------------------------------------------------
-                string archiveTarget = Path.GetFullPath(Path.Combine(inFile.DirectoryName, fcu.ReplaceKeyword(fnAttr.actionTarget)));
-                // ----------------------------------------------------------------------------------------------------------------
-                //   Add the current file to the sortedlist using the targetPath as key
-                // ----------------------------------------------------------------------------------------------------------------
-                try { archiveList = archiveDictionary[archiveTarget]; }
-                catch { total.Logger.Debug("Collecting files for archive \"" + archiveTarget + "\""); }
-                archiveList.Add(inFile.FullName);
-                archiveDictionary[archiveTarget] = archiveList;
+                try
+                {
+                    List<string> archiveList = archiveSet[archive];
+                    archiveSet[archive].Add(inFile.FullName);
+                }
+                catch
+                {
+                    total.Logger.Debug("Collecting files for archive \"" + archive + "\"");
+                    List<string> archiveList = new List<string>();
+                    archiveList.Add(inFile.FullName);
+                    archiveSet.Add(archive, archiveList);
+                }
             }
             // --------------------------------------------------------------------------------------------------------------------
             //   For each archiveTarget, start an archive action for the appropriate files
             // --------------------------------------------------------------------------------------------------------------------
-            foreach (string archiveTarget in archiveDictionary.Keys)
+            foreach (string archiveTarget in archiveSet.Keys)
             {
+                List<string> archiveList = archiveSet[archiveTarget];
                 // ----------------------------------------------------------------------------------------------------------------
                 //  Archiver takes care of creating batches (in case too many files must be archived) etc.
                 // ----------------------------------------------------------------------------------------------------------------
                 if (!total.APP.Dryrun)
                 {
-                    folder_bytesOriginal = 0; folder_bytesArchived = 0;
+                    folder_bytesArchived = folder_bytesDeleted = 0;
                     // ------------------------------------------------------------------------------------------------------------
                     //  Create the destination folder in case it does not exist
                     // -------------------------------------------------------------------------------------------------------------
@@ -221,19 +237,20 @@ namespace Total.WinFCU
                     // ------------------------------------------------------------------------------------------------------------
                     //  Process the files for the given target - target by target
                     // -------------------------------------------------------------------------------------------------------------
-                    List<total.ARC> archiveResult = total.CompressFiles(archiveDictionary[archiveTarget].ToArray(), archiveTarget, CompressionLevel.Optimal, 100, true);
+                    List<total.ARC> archiveResult = total.CompressFiles(archiveList.ToArray(), archiveTarget, CompressionLevel.Optimal, 100, true, fnAttr.archivePath);
                     foreach (var entry in archiveResult)
                     {
-                        folder_bytesOriginal += entry.orgFileSize;
+                        folder_bytesDeleted  += entry.orgFileSize;
                         folder_bytesArchived += entry.cmpFileSize;
-                        folder_bytesDeleted  += entry.bytesDeleted;
                     }
                 }
-                folder_ZipRatio = folder_bytesOriginal > 0 ? Math.Round((decimal)100 * folder_bytesArchived / folder_bytesOriginal, 1) : -1;
+                archiveList.Clear();
+                folder_ZipRatio = folder_bytesDeleted > 0 ? Math.Round((decimal)100 * folder_bytesArchived / folder_bytesDeleted, 1) : -1;
                 total_bytesArchived += folder_bytesArchived;
                 total_bytesDeleted  += folder_bytesDeleted;
                 total.Logger.Debug("Archive results (D/A/R) for folder \"" + INF.filePath + "\" - " + folder_bytesDeleted + "/" + folder_bytesArchived + "/" + folder_ZipRatio);
             }
+            archiveSet.Clear();
         }
 
     // ----------------------------------------------------------------------------------------------------------------------------

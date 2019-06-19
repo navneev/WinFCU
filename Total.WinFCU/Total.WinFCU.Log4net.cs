@@ -1,19 +1,11 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Configuration;
-using System.IO;
-using System.Management.Automation;
-using System.Reflection;
-using System.Windows.Forms;
-using System.Xml;
-using System.Xml.XPath;
 using Total.Util;
 using Total.CLI;
 using log4net;
 using log4net.Appender;
 using log4net.Core;
 using log4net.Layout;
-using log4net.Util;
 using log4net.Repository.Hierarchy;
 
 namespace Total.WinFCU
@@ -23,9 +15,10 @@ namespace Total.WinFCU
         // ------------------------------------------------------------------------------------------------------------------------
         //  Initialize and start log4net
         // ------------------------------------------------------------------------------------------------------------------------
-        public static void InitializeLog4net()
+        public static void InitializeLog4net(string logFilename = null, Level logLevel = null)
         {
-            Level logLevel = (cli.IsPresent("Debug") && !cli.IsNegated("Debug")) ? Level.Debug : Level.Info;
+            if (logFilename == null) { logFilename = @"'logs\WinFCU_'yyyyMMdd'.log'"; }
+            if (logLevel == null) { logLevel = (cli.IsPresent("Debug") && !cli.IsNegated("Debug")) ? Level.Debug : Level.Info; }
             // --------------------------------------------------------------------------------------------------------------------
             //  See whether a 'customer' log4net configuration has been provided. When present use it
             // --------------------------------------------------------------------------------------------------------------------
@@ -42,34 +35,35 @@ namespace Total.WinFCU
             else
             {
                 // ----------------------------------------------------------------------------------------------------------------
-                //  Setup a default console and logfile appender. Use the commandline input if present
-                // ----------------------------------------------------------------------------------------------------------------
-                string logFilename = @"'Log\WinFCU_'yyyyMMdd'.log'";
-                if (cli.IsPresent("logfile")) { logFilename = ReplaceKeyword(cli.GetValue("logfile")); }
-                // ----------------------------------------------------------------------------------------------------------------
                 //   Reset the current log config and start a new one
                 // ----------------------------------------------------------------------------------------------------------------
                 if (total.Logger != null) { total.Logger.Logger.Repository.ResetConfiguration(); }
                 Hierarchy hierarchy = (Hierarchy)LogManager.GetRepository();
+#pragma warning disable IDE0017 // Simplify object initialization
                 PatternLayout patternLayout = new PatternLayout();
+#pragma warning restore IDE0017 // Simplify object initialization
                 patternLayout.ConversionPattern = "%date{yyyy-MM-dd HH:mm:ss} - %-5level - %m%n";
                 patternLayout.ActivateOptions();
                 // ----------------------------------------------------------------------------------------------------------------
                 //   Create a RollingLogfileAppender
                 // ----------------------------------------------------------------------------------------------------------------
-                RollingFileAppender rfa = new RollingFileAppender();
-                rfa.Name = "WinFCU-RollingLogfileAppender";
-                rfa.File = logFilename;
-                rfa.StaticLogFileName = false;
-                rfa.RollingStyle = RollingFileAppender.RollingMode.Date;
-                rfa.Layout = patternLayout;
-                rfa.LockingModel = new FileAppender.MinimalLock();
-                rfa.Threshold = logLevel;
-                rfa.ActivateOptions();
+#pragma warning disable IDE0017 // Simplify object initialization
+                RollingFileAppender rlfa = new RollingFileAppender();
+#pragma warning restore IDE0017 // Simplify object initialization
+                rlfa.Name = "WinFCU-RollingLogfileAppender";
+                rlfa.File = logFilename;
+                rlfa.AppendToFile = true;
+                rlfa.StaticLogFileName = false;
+                rlfa.RollingStyle = RollingFileAppender.RollingMode.Date;
+                rlfa.Layout = patternLayout;
+                rlfa.Threshold = logLevel;
+                rlfa.ActivateOptions();
                 // ----------------------------------------------------------------------------------------------------------------
                 //   Create a ManagedColoredConsoleAppender
                 // ----------------------------------------------------------------------------------------------------------------
+#pragma warning disable IDE0017 // Simplify object initialization
                 ManagedColoredConsoleAppender mcca = new ManagedColoredConsoleAppender();
+#pragma warning restore IDE0017 // Simplify object initialization
                 mcca.Name = "WinFCU-ManagedColoredConsoleAppender";
                 mcca.AddMapping(new ManagedColoredConsoleAppender.LevelColors { Level = Level.Fatal, ForeColor = ConsoleColor.Magenta,  BackColor = ConsoleColor.Black });
                 mcca.AddMapping(new ManagedColoredConsoleAppender.LevelColors { Level = Level.Error, ForeColor = ConsoleColor.Red,      BackColor = ConsoleColor.Black });
@@ -82,7 +76,7 @@ namespace Total.WinFCU
                 // ----------------------------------------------------------------------------------------------------------------
                 //   Build the hierarchy and start it
                 // ----------------------------------------------------------------------------------------------------------------
-                hierarchy.Root.AddAppender(rfa);
+                hierarchy.Root.AddAppender(rlfa);
                 hierarchy.Root.AddAppender(mcca);
                 hierarchy.Configured = true;
                 // ----------------------------------------------------------------------------------------------------------------
@@ -103,7 +97,6 @@ namespace Total.WinFCU
             hierarchy.Root.Level = loggerLevel;
             hierarchy.RaiseConfigurationChanged(EventArgs.Empty);
         }
-
 
     }
 }
