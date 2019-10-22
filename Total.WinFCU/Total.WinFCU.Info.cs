@@ -24,8 +24,8 @@ namespace Total.WinFCU
             try
             {
                 // Get all possible service info
-                ServiceController sc = new ServiceController(ProjectInstaller.ServiceName);
-                string svcKey = "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\" + ProjectInstaller.ServiceName;
+                ServiceController sc = new ServiceController(ProjectInstaller.SvcServiceName);
+                string svcKey = "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\" + ProjectInstaller.SvcServiceName;
                 string startType = "Automatic";
                 int svc_StartType = (int)Registry.GetValue(svcKey, "Start", -1);
                 if (svc_StartType == (int)ServiceStartMode.Manual) { startType = "Manual"; }
@@ -38,8 +38,10 @@ namespace Total.WinFCU
                 svcInfo += String.Format("  - Can Shutdown       : {0,-15} - Service Type     : {1}\r\n", sc.CanShutdown, sc.ServiceType);
                 svcInfo += String.Format("  - Can Pause/Continue : {0,-15} - Startup Type     : {1}\r\n", sc.CanPauseAndContinue, startType);
                 Console.WriteLine(svcInfo);
+                sc.Dispose();
             }
-            catch { Console.WriteLine(ProjectInstaller.ServiceName + " is not installed as service"); return; }
+            catch (Exception) { Console.WriteLine(ProjectInstaller.SvcServiceName + " is not installed as service"); }
+            return;
         }
 
         // ====================================================================================================================
@@ -123,7 +125,9 @@ Copyright (C) 2016-{1} Hans van Veen, Total Productions
                              Can explicitly be negated (-noDryrun or -noWhatIf)
 
  Service:
-   -service [un]install      Install (or uninstall WinFCU as service
+   -service [un]install      Install (or uninstall) WinFCU as service (requires elevation)
+   -service stop/[re]start   Stop, Start or Restart the WinFCU service (requires elevation)
+   -service status           Show the WinFCU service status (Not Installed, Stopped, Running, etc.)
 
  For details on the various qualifiers and the content of the configuration file please refer to the documentation.
 
@@ -153,8 +157,8 @@ Copyright (C) 2016-{1} Hans van Veen, Total Productions
         // --------------------------------------------------------------------------------------------------------------------
         public static string GetStatus()
         {
-            string sc_Status = "";
-            try { ServiceController sc = new ServiceController(ProjectInstaller.ServiceName); sc_Status = sc.Status.ToString(); }
+            string sc_Status;
+            try { ServiceController sc = new ServiceController(ProjectInstaller.SvcServiceName); sc_Status = sc.Status.ToString(); sc.Dispose(); }
             catch (Exception) { sc_Status = "No Service"; }
             // --------------------------------------------------------------------------------------------------------------------
             //   Lets put all info into the prcInfo string so it will be written to the logfile when the config is (re)loaded
@@ -180,7 +184,7 @@ Copyright (C) 2016-{1} Hans van Veen, Total Productions
             prcInfo += String.Format("  - Logfile              : {0}\r\n", fcu.runLogFile);
             prcInfo += String.Format("  - Config file          : {0}\r\n", fcu.runConfig);
             string showInclude = "  - Include file(s)      : {0}\r\n";
-            foreach (string incFile in fcu.incConfig)
+            foreach (string incFile in fcu.includeFiles)
             {
                 prcInfo += String.Format(showInclude, incFile);
                 showInclude = "                           {0}\r\n";

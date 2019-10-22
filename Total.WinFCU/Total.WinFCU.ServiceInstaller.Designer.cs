@@ -5,16 +5,16 @@ namespace Total.WinFCU
 {
     partial class ProjectInstaller
     {
-        public const string ServiceName        = "WinFCUService";
-        public const string ServiceDisplayName = "Windows Filesystem Cleanup Utility";
-        public const string ServiceDescription = "Rule base utility which keeps the filesystem clean by archiving/deleting/moving unwanted/unneeded files from the filesystem";
-
         /// <summary>
         /// Required designer variable.
         /// </summary>
         private IContainer components = null;
         private ServiceProcessInstaller WinFCUProcessInstaller;
         private ServiceInstaller WinFCUService;
+
+        public const string SvcServiceName = "WinFCUService";
+        public const string SvcDisplayName = "Windows Filesystem Cleanup Utility";
+        public const string SvcDesription  = "Rule base utility which keeps the filesystem clean by archiving/deleting/moving unwanted/unneeded files from the filesystem";
 
         /// <summary> 
         /// Clean up any resources being used.
@@ -48,9 +48,9 @@ namespace Total.WinFCU
             // 
             // WinFCUService
             // 
-            this.WinFCUService.ServiceName      = ServiceName;
-            this.WinFCUService.DisplayName      = ServiceDisplayName;
-            this.WinFCUService.Description      = ServiceDescription;
+            this.WinFCUService.ServiceName      = SvcServiceName;
+            this.WinFCUService.DisplayName      = SvcDisplayName;
+            this.WinFCUService.Description      = SvcDesription;
             this.WinFCUService.DelayedAutoStart = true;
             this.WinFCUService.StartType        = ServiceStartMode.Automatic;
             // 

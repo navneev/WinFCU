@@ -15,8 +15,8 @@ namespace Total.WinFCU
             this.CanShutdown = true;
             this.CanHandlePowerEvent = true;
             fcu.evtLog = new EventLog();
-            if (!EventLog.SourceExists(ProjectInstaller.ServiceName)) { EventLog.CreateEventSource(ProjectInstaller.ServiceName, fcu.EventLogName); }
-            fcu.evtLog.Source = ProjectInstaller.ServiceName;
+            if (!EventLog.SourceExists(ProjectInstaller.SvcServiceName)) { EventLog.CreateEventSource(ProjectInstaller.SvcServiceName, fcu.EventLogName); }
+            fcu.evtLog.Source = ProjectInstaller.SvcServiceName;
             fcu.evtLog.Log = fcu.EventLogName;
             fcu.evtLog.WriteEntry("Initializing the WinFCU service");
             fcu.EventLogInitialized = true;

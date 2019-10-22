@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Configuration.Install;
 using System.IO;
 using System.Reflection;
+using System.ServiceProcess;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Timers;
 using Total.CLI;
@@ -55,7 +57,7 @@ namespace Total.WinFCU
             cli.AddDefinition("{negatable,alias(whatif)}[bool]dryrun");
             cli.AddDefinition("{mandatory,notnullorempty}[string[]]schedule=#ALL#");
             cli.AddDefinition("{notnullorempty,validateset(keywords|license|version|status|schedule|service)}[string]show");
-            cli.AddDefinition("{notnullorempty,validateset(install|uninstall)}[string]service");
+            cli.AddDefinition("{notnullorempty,validateset(install|uninstall|start|stop|restart|status)}[string]service");
             cli.AddDefinition("{alias(?)}[bool]help");
             cli.AddRule("<disallow any2(export,show,help,logfile,service)>");
             cli.LoadDefinitions();
@@ -96,15 +98,85 @@ namespace Total.WinFCU
             // --------------------------------------------------------------------------------------------------------------------
             if (cli.IsPresent("Service"))
             {
+                bool svcInstalled;
+                ServiceController sc = null;
+                try { sc = new ServiceController(ProjectInstaller.SvcServiceName); svcInstalled = sc.ServiceName == ProjectInstaller.SvcServiceName; }
+                catch (Exception) { svcInstalled = false; }
+
+                string svcRequest = cli.GetValue("Service").ToLower();
+
                 try
                 {
-                    switch (cli.GetValue("Service").ToLower())
+                    switch (svcRequest)
                     {
-                        case "install": ManagedInstallerClass.InstallHelper(new string[] { Assembly.GetExecutingAssembly().Location }); break;
-                        case "uninstall": ManagedInstallerClass.InstallHelper(new string[] { "/u", Assembly.GetExecutingAssembly().Location }); break;
+                        case "install":
+                            if (!svcInstalled) {
+                                ManagedInstallerClass.InstallHelper(new string[] { Assembly.GetExecutingAssembly().Location });
+                                total.Logger.Info("The WinFCU service has been installed");
+                            }
+                            else
+                            {
+                                Console.WriteLine("The WinFCU service is already installed");
+                            }
+                            break;
+                        case "uninstall":
+                            if (svcInstalled)
+                            {
+                                ManagedInstallerClass.InstallHelper(new string[] { "/u", Assembly.GetExecutingAssembly().Location });
+                                total.Logger.Info("The WinFCU service has been uninstalled");
+                            }
+                            else
+                            {
+                                Console.WriteLine("The WinFCU service is not installed");
+                            }
+                            break;
+                        case "start":
+                            if (svcInstalled) {
+                                if (sc.Status != ServiceControllerStatus.Running)
+                                {
+                                    sc.Start();
+                                    sc.WaitForStatus(ServiceControllerStatus.Running);
+                                }
+                                else
+                                {
+                                    Console.WriteLine("The WinFCU service is already running");
+                                }
+                            }
+                            break;
+                        case "stop":
+                            if (svcInstalled) {
+                                if (sc.Status != ServiceControllerStatus.Stopped)
+                                {
+                                    sc.Stop();
+                                    sc.WaitForStatus(ServiceControllerStatus.Stopped);
+                                }
+                                else
+                                {
+                                    Console.WriteLine("The WinFCU service is not running");
+                                }
+                            }
+                            break;
+                        case "restart":
+                            if (svcInstalled)
+                            {
+                                total.Logger.Info("The WinFCU service is restarting.......");
+                                if (sc.Status != ServiceControllerStatus.Stopped) { sc.Stop(); }
+                                sc.WaitForStatus(ServiceControllerStatus.Stopped);
+                                sc.Start();
+                                sc.WaitForStatus(ServiceControllerStatus.Running);
+                            }
+                            break;
+                        case "status":
+                            if (!svcInstalled) {
+                                Console.WriteLine("The WinFCU service is Not Installed");
+                            }
+                            else {
+                                Console.WriteLine("The WinFCU service is " + sc.Status.ToString());
+                            }
+                            break;
                     }
                 }
-                finally { Environment.Exit(0); }
+                finally { sc.Dispose();  Environment.Exit(0); }
             }
             // --------------------------------------------------------------------------------------------------------------------
             //   Also if export is requested we can do so now and exit
@@ -237,10 +309,10 @@ namespace Total.WinFCU
                 return;
             }
             fswList.Clear();
-            foreach (string incPath in fcu.includePaths)
+            foreach (string fswTarget in fcu.fswTargets)
             {
-                total.Logger.Debug("Adding FSW for: " + incPath);
-                FileSystemWatcher fsw = new FileSystemWatcher(Path.GetDirectoryName(incPath), Path.GetFileName(incPath));
+                total.Logger.Debug("Adding FSW for: " + fswTarget);
+                FileSystemWatcher fsw = new FileSystemWatcher(Path.GetDirectoryName(fswTarget), Path.GetFileName(fswTarget));
                 fsw.Changed += fswEventHandler;
                 fsw.Created += fswEventHandler;
                 fsw.Deleted += fswEventHandler;
@@ -250,5 +322,13 @@ namespace Total.WinFCU
             }
         }
 
+//        public static bool regexCase(string switchInput, string matchInput)
+//        {
+//            int i = matchInput.Length - 1;
+//            string regexMatch = matchInput[i].ToString();
+//            for (int j = i-1; j >= 0; j--) { regexMatch = matchInput[j].ToString() + '(' + regexMatch + @")?"; }
+//            Regex rgx = new Regex('^' + regexMatch + '$');
+//            return rgx.IsMatch(switchInput);
+//        }
     }
 }

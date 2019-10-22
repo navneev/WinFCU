@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -19,7 +20,7 @@ namespace Total.WinFCU
         public static EventSchedule evtSch = new EventSchedule();
         private static scanAttributes defAttributes = new scanAttributes();
         public static Dictionary<char, string> checkType = new Dictionary<char, string>() { { 'm', "Modified" }, { 'c', "Created" } };
-//        private static string WildcardToRegex(string pattern) { return "^" + pattern.Replace(@".", @"\.").Replace(@"*", @".*").Replace(@"?", @".") + "$"; }
+        // private static string WildcardToRegex(string pattern) { return "^" + pattern.Replace(@".", @"\.").Replace(@"*", @".*").Replace(@"?", @".") + "$"; }
         private static string[] GetAllFilesFromFolder(string root, SearchOption searchSubfolders, string filename = "*.*")
         {
             Queue<string> folders = new Queue<string>();
@@ -35,9 +36,11 @@ namespace Total.WinFCU
                     string[] filesInCurrent = Directory.GetFiles(currentFolder, filename, SearchOption.TopDirectoryOnly);
                     files.AddRange(filesInCurrent);
                 }
+                catch (PathTooLongException exPTL) { total.Logger.Debug(exPTL.Message + " - " + currentFolder); continue; }
                 catch (DirectoryNotFoundException exDNF) { total.Logger.Debug(exDNF.Message); continue; }
                 catch (UnauthorizedAccessException exUAE) { total.Logger.Debug(exUAE.Message); continue; }
                 catch (ArgumentException exAE) { total.Logger.Debug(exAE.Message.TrimEnd('.') + " \"" + currentFolder + "\""); continue; }
+                catch (IOException exIO) { total.Logger.Debug(exIO.Message); continue; }
                 // Scan for subfolders? Add them to the queue and process them
                 if (searchSubfolders == SearchOption.TopDirectoryOnly) { continue; }
                 try
@@ -48,19 +51,18 @@ namespace Total.WinFCU
             }
             return files.ToArray();
         }
-
-//        private static void ShowFolderAttributes(scanAttributes fa)
-//        {
-//            total.Logger.Debug("Attributes for the current FolderSet:");
-//            total.Logger.Debug("-------------------------------------");
-//            total.Logger.Debug(" - processHiddenFiles: " + fa.processHiddenFiles);
-//            total.Logger.Debug(" - deleteEmptyFolders: " + fa.deleteEmptyFolders);
-//            total.Logger.Debug(" - forceOverWrite:     " + fa.forceOverWrite);
-//            total.Logger.Debug(" - recursiveScan:      " + fa.recursiveScan);
-//            total.Logger.Debug(" - excludePath:        " + fa.excludeFromScan);
-//            total.Logger.Debug(" - scheduleName:       " + fa.scheduleName);
-//            total.Logger.Debug(" - systemName:         " + fa.systemName);
-//        }
+        // private static void ShowFolderAttributes(scanAttributes fa)
+        // {
+        //     total.Logger.Debug("Attributes for the current FolderSet:");
+        //     total.Logger.Debug("-------------------------------------");
+        //     total.Logger.Debug(" - processHiddenFiles: " + fa.processHiddenFiles);
+        //     total.Logger.Debug(" - deleteEmptyFolders: " + fa.deleteEmptyFolders);
+        //     total.Logger.Debug(" - forceOverWrite:     " + fa.forceOverWrite);
+        //     total.Logger.Debug(" - recursiveScan:      " + fa.recursiveScan);
+        //     total.Logger.Debug(" - excludePath:        " + fa.excludeFromScan);
+        //     total.Logger.Debug(" - scheduleName:       " + fa.scheduleName);
+        //     total.Logger.Debug(" - systemName:         " + fa.systemName);
+        // }
         private static void ExecutePrePostAction(string Action, string Type)
         {
             string Message = String.Format("Performing {0}: {1}", Type, Action);
@@ -70,8 +72,8 @@ namespace Total.WinFCU
                 total.Logger.Info(Message);
                 try
                 {
-                    PowerShell ps = PowerShell.Create().AddScript(Action);
-                    foreach (PSObject result in ps.Invoke()) { if (total.Logger.IsDebugEnabled) { total.Logger.Debug(String.Format("{0} result: {1}", Type, result.BaseObject.ToString())); } }
+                    List<string> psResults = InvokePowerShell(Action);
+                    foreach (string result in psResults) { if (total.Logger.IsDebugEnabled) { total.Logger.Debug(String.Format("{0} result: {1}", Type, result)); } }
                 }
                 catch (Exception ex) { total.Logger.Warn("FolderSet " + Type + " failed due to: " + ex.Message); }
             }
@@ -140,49 +142,203 @@ namespace Total.WinFCU
         }
 
         // ------------------------------------------------------------------------------------------------------------------------
-        //   Load process, environment, configuration and other details into local storage
+        //   Load process, environment, configuration and other details into local storage. Some parts are main config only, these
+        //   settings are located in the <startup> node. Other parts can be defined in multiple locations (config files), these
+        //   settings are located in the <applicationSettings> node. Logging is now done via the <log4net> settings
         //   Beware of Inheritable and Non-Inheritable attributes!
         // ------------------------------------------------------------------------------------------------------------------------
         public static void LoadConfiguration(string fcuConfigFile)
         {
             string xmlTransNode = "/*[translate(local-name(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='{0}']";
-            string foldersQuery = String.Format(xmlTransNode, "configuration") +
-                                  String.Format(xmlTransNode, "applicationsettings") +
-                                  String.Format(xmlTransNode, "folders");
             // --------------------------------------------------------------------------------------------------------------------
             //   Check the existance of the config file and if it does not exist - Quit!
             // --------------------------------------------------------------------------------------------------------------------
             fcu.runConfig = fcu.ReplaceKeyword(fcuConfigFile);
             if (!File.Exists(fcu.runConfig)) { total.Logger.Error("Config file \"" + fcu.runConfig + "\" not found, terminating now..."); Environment.Exit(1); }
             // --------------------------------------------------------------------------------------------------------------------
-            //  Read the file content and return it as an XML document
+            //  Read the main config file content and return it as an XML document
             // --------------------------------------------------------------------------------------------------------------------
-            fcu.includePaths.Clear();
-            fcu.includePaths.Add(fcu.runConfig);
+            fcu.fswTargets.Clear();
+            fcu.fswTargets.Add(fcu.runConfig);
             total.Logger.Debug("Loading primary config file: " + fcu.runConfig);
-            fcu.fcuConfig = new XmlDocument();
+            fcu.fcuConfig = LoadXmlDocument(fcu.runConfig);
             // --------------------------------------------------------------------------------------------------------------------
-            //  The config file might still be locked due to whatever reason, so if we get an exception - try again after 1 sec.
+            //  The config file is loaded, lets process the startup content
+            //   - runOptions
+            //   - defaults
+            //   - includeFiles
             // --------------------------------------------------------------------------------------------------------------------
-            int loadAttempt = 0;
-            while (true)
+            //   XML query for RunOptions, get them all. Re-apply the commandline settings afterwards
+            // --------------------------------------------------------------------------------------------------------------------
+            total.Logger.Debug("Loading Run options");
+            total.APP.Debug = false; total.APP.Dryrun = false;
+            string runQuery = String.Format(xmlTransNode, "configuration") +
+                              String.Format(xmlTransNode, "applicationsettings") +
+                              String.Format(xmlTransNode, "runoptions");
+            try
             {
-                try { fcu.fcuConfig.Load(fcu.runConfig); break; }
-                catch (Exception ex)
+                foreach (XmlAttribute attribute in fcu.fcuConfig.SelectSingleNode(runQuery).Attributes)
                 {
-                    if (++loadAttempt > 4)
+                    string defValue = attribute.Name.ToLower();
+                    switch (defValue)
                     {
-                        total.Logger.Fatal("Error loading config file " + fcu.runConfig + "\n", ex);
-                        Environment.Exit(1);
+                        case "debug":             total.APP.Debug   = attribute.Value.ToLower() == "true"; break;
+                        case "dryrun":            total.APP.Dryrun  = attribute.Value.ToLower() == "true"; break;
+                        case "parallelschedules": parallelSchedules = attribute.Value.ToLower() == "true"; break;
+                        default: total.Logger.Error("Invalid RunOption setting " + defValue + " detected, terminating process"); Environment.Exit(1); break;
                     }
-                    else { System.Threading.Thread.Sleep(1000); }
+                }
+                if (cli.IsPresent("Dryrun")) { total.APP.Dryrun = Convert.ToBoolean(cli.GetValue("Dryrun")); }
+                if (cli.IsPresent("Debug")) { total.APP.Debug = Convert.ToBoolean(cli.GetValue("Debug")); }
+                if (total.APP.Debug) { total.Log4netSetRootLevel(Level.Debug); } else { total.Log4netSetRootLevel(Level.Info); }
+            }
+            catch (Exception ex) { total.Logger.Fatal("Error processing Defaults settings.\n", ex); Environment.Exit(1); }
+            // --------------------------------------------------------------------------------------------------------------------
+            //   XML query for Defaults, get them all (which are inheritable attributes!).
+            // --------------------------------------------------------------------------------------------------------------------
+            total.Logger.Debug("Loading Defaults section");
+            // Non-inheritable
+            defAttributes.actionName         = "";
+            defAttributes.actionTarget       = "";
+            defAttributes.fileName           = "";
+            // Inheritable
+            defAttributes.excludeFromScan    = new Regex("#NONE#", RegexOptions.IgnoreCase);
+            defAttributes.deleteEmptyFolders = false;
+            defAttributes.fileAge            = "10";
+            defAttributes.checkType          = 'm';
+            defAttributes.forceOverWrite     = false;
+            defAttributes.processHiddenFiles = false;
+            defAttributes.recursiveScan      = false;
+            defAttributes.archivePath        = "None";
+            defAttributes.scheduleName       = "#ALL#";
+            defAttributes.systemName         = new Regex(".*", RegexOptions.IgnoreCase);
+
+            string defQuery                  = String.Format(xmlTransNode, "configuration") +
+                                               String.Format(xmlTransNode, "applicationsettings") +
+                                               String.Format(xmlTransNode, "defaults");
+            try
+            {
+                foreach (XmlAttribute attribute in fcu.fcuConfig.SelectSingleNode(defQuery).Attributes)
+                {
+                    string defValue = attribute.Name;
+                    switch (defValue.ToLower())
+                    {
+                        case "deleteemptyfolders": defAttributes.deleteEmptyFolders = Convert.ToBoolean(attribute.Value); break;
+                        case "age":                defAttributes.fileAge            = attribute.Value; break;
+                        case "check":              defAttributes.checkType          = attribute.Value.ToLower()[0]; break;
+                        case "forceoverwrite":     defAttributes.forceOverWrite     = Convert.ToBoolean(attribute.Value); break;
+                        case "processhiddenfiles": defAttributes.processHiddenFiles = Convert.ToBoolean(attribute.Value); break;
+                        case "recursive":          defAttributes.recursiveScan      = Convert.ToBoolean(attribute.Value); break;
+                        case "archivepath":        defAttributes.archivePath        = attribute.Value; break;
+                        case "schedule":           defAttributes.scheduleName       = attribute.Value; break;
+                        case "system":             defAttributes.systemName         = new Regex(attribute.Value, RegexOptions.IgnoreCase); break;
+                        case "exclude":            defAttributes.excludeFromScan    = new Regex(attribute.Value, RegexOptions.IgnoreCase); break;
+                        default: total.Logger.Error("Invalid Defaults setting \"" + defValue + "\" detected, terminating process"); Environment.Exit(1); break;
+                    }
                 }
             }
+            catch (Exception ex) { total.Logger.Fatal("Error processing Defaults settings.\n", ex); Environment.Exit(1); }
             // --------------------------------------------------------------------------------------------------------------------
-            //  The config file is loaed, letsd process its content
+            //   File age check type can only be 'c' (Created) or 'm' (Modified) - Quit if something else is specified
             // --------------------------------------------------------------------------------------------------------------------
-            XmlNodeList fcuNodeList = fcu.fcuConfig.SelectNodes(foldersQuery);
-            foreach (XmlElement fcuNode in fcuNodeList) { fcuNode.SetAttribute("configname", Path.GetFileName(fcu.runConfig)); }
+            ValidateFileCheck(defAttributes.checkType, "Defaults");
+            // --------------------------------------------------------------------------------------------------------------------
+            //   Logging is performed via log4net. So ask log4net for its name!
+            // --------------------------------------------------------------------------------------------------------------------
+            foreach (IAppender l4nAppender in (total.Logger.Logger.Repository.GetAppenders()))
+            {
+                Type t = l4nAppender.GetType();
+                if (!t.Equals(typeof(FileAppender)) & !t.Equals(typeof(RollingFileAppender))) { continue; }
+                fcu.runLogFile = ((FileAppender)l4nAppender).File;
+                break;
+            }
+            // --------------------------------------------------------------------------------------------------------------------
+            //   Time to include the extra config files. Additional config files can define;
+            //    - extra keywords
+            //    - extra restricted paths
+            //    - extra schedules
+            //    - extra folders and files
+            //   Create one big xml document containing all that information
+            // --------------------------------------------------------------------------------------------------------------------
+            total.Logger.Debug("Loading Include file(s)");
+            string incFileLoading = "";
+            string incQuery = String.Format(xmlTransNode, "configuration") +
+                              String.Format(xmlTransNode, "applicationsettings") +
+                              String.Format(xmlTransNode, "includefiles") +
+                              String.Format(xmlTransNode, "add");
+            try
+            {
+                fcu.includeFiles.Clear();
+                foreach (XmlElement incNode in fcu.fcuConfig.SelectNodes(incQuery))
+                {
+                    string includePath = ""; string includeFile = "";
+                    // Validate the specified attribute(s)
+                    foreach (XmlAttribute incAttribute in incNode.Attributes)
+                    {
+                        switch (incAttribute.Name.ToLower())
+                        {
+                            case "path": includePath = incAttribute.Value; break;
+                            default: total.Logger.Error("Invalid attribute \"" + incAttribute.Name + "\" found in includeFiles"); break;
+                        }
+                    }
+                    // Validate the validity of the file (does it/do they exist)
+                    if (includePath.Length == 0) { total.Logger.Warn("No includeFiles path specified."); return; }
+                    includePath = fcu.ReplaceKeyword(includePath);
+                    if (!Path.IsPathRooted(includePath)) { includePath = Path.Combine(total.APP.Path, includePath); }
+                    includeFile = Path.GetFileName(includePath);
+                    if (includeFile.Length == 0) { includeFile = "*.config"; }
+                    includePath = Path.GetDirectoryName(includePath);
+                    DirectoryInfo incDirInfo = new DirectoryInfo(includePath);
+                    if (!incDirInfo.Exists) { total.Logger.Warn("Specified includeFiles path does not exist."); }
+                    else
+                    // Process all files found
+                    {
+                        fcu.fswTargets.Add(Path.Combine(includePath, includeFile));
+                        FileInfo[] incFileInfo = incDirInfo.GetFiles(includeFile);
+                        foreach (FileInfo incFile in incFileInfo)
+                        {
+                            incFileLoading = incFile.FullName;
+                            total.Logger.Debug("Processing include file " + incFileLoading);
+                            XmlDocument incConfig = LoadXmlDocument(incFileLoading);
+                            // ----------------------------------------------------------------------------------------------------
+                            //  The config file is loaded, merge its applicationSettings content with that of the already loaded
+                            //  config files
+                            // ----------------------------------------------------------------------------------------------------
+                            string appQuery = String.Format(xmlTransNode, "configuration") +
+                                              String.Format(xmlTransNode, "applicationsettings");
+                            XmlNodeList incAppList = incConfig.SelectNodes(appQuery);
+                            // Is this include file meant for this system??
+                            string incSystem = "";
+                            try   { foreach (XmlNode incApp in incAppList) { incSystem = incApp.Attributes.GetNamedItem("system").Value; } }
+                            catch (NullReferenceException) { incSystem = ""; }
+                            if ((String.IsNullOrEmpty(incSystem)) || (Regex.Match(total.ENV.Server, incSystem, RegexOptions.IgnoreCase).Success))
+                            {
+                                fcu.includeFiles.Add(incFileLoading);
+                            }
+                            else
+                            {
+                                total.Logger.Debug("Skipping include file \"" + incFileLoading + "\"");
+                                fcu.includeFiles.Add("*" + incFileLoading);
+                                continue;
+                            }
+                            // Merge the found includefile content with the current set
+                            foreach (XmlNode node in incConfig.DocumentElement.ChildNodes)
+                            {
+                                XmlNode imported = fcu.fcuConfig.ImportNode(node, true);
+                                fcu.fcuConfig.DocumentElement.AppendChild(imported);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { total.Logger.Fatal("Fatal error processing include file \"" + incFileLoading + "\"", ex); Environment.Exit(1); }
+            // --------------------------------------------------------------------------------------------------------------------
+            //  All config files are loaded, lets process the contents
+            // --------------------------------------------------------------------------------------------------------------------
+            // string foldersQuery = String.Format(xmlTransNode, "configuration") +
+            //                       String.Format(xmlTransNode, "applicationsettings") +
+            //                       String.Format(xmlTransNode, "folders");
+            // XmlNodeList fcuNodeList = fcu.fcuConfig.SelectNodes(foldersQuery);
             // --------------------------------------------------------------------------------------------------------------------
             //   Restricted paths! - Some paths you just do not want to be cleaned. Paths like C:\, C:\Windows, C:\Users, etc.
             //   The restrictedPath is preloaded with some path WinFCU will not clean by default.
@@ -192,7 +348,7 @@ namespace Total.WinFCU
                              String.Format(xmlTransNode, "applicationsettings") +
                              String.Format(xmlTransNode, "restrictedpaths") +
                              String.Format(xmlTransNode, "add");
-            // First of all preload the restricted path list
+            // Preload the restricted path list
             restrictedPaths.Clear();
             restrictedPaths.Add(total.ENV.SysDrive + "\\");
             restrictedPaths.Add(total.ENV.WinDir);
@@ -240,16 +396,16 @@ namespace Total.WinFCU
                         switch (kwAttribute.Name.ToLower())
                         {
                             case "key":         kwKey         = kwAttribute.Value; break;
-                            case "value":       kwValue       = kwAttribute.Value; break;
+                            case "value":       kwValue       = fcu.ReplaceKeyword(kwAttribute.Value); break;
                             case "description": kwDescription = kwAttribute.Value; break;
                             default: total.Logger.Error("Invalid attribute \"" + kwAttribute.Name + "\" found in " + kwNode.OuterXml); break;
                         }
                     }
                     if (kwKey.Length == 0)   { total.Logger.Warn("No key attribute in line: " + kwNode.OuterXml); continue; }
                     if (kwValue.Length == 0) { total.Logger.Warn("No scriptblock attribute in line: " + kwNode.OuterXml); continue; }
-                    total.Logger.Debug("Verifying user keyword: " + kwKey);
-                    PowerShell ps = PowerShell.Create().AddScript(kwValue);
-                    foreach (PSObject result in ps.Invoke()) { total.AddReplacementKeyword(kwKey, result.BaseObject.ToString(), "USER: " + kwDescription); }
+                    total.Logger.Debug("Verifying user keyword: " + kwKey + " => " + kwValue);
+                    List<string> psResults = InvokePowerShell(kwValue);
+                    foreach (string result in psResults) { total.AddReplacementKeyword(kwKey, result, "USER: " + kwDescription); }
                 }
             }
             catch (Exception ex) { total.Logger.Fatal("Error processing WinFCU User Keywords.\n", ex); Environment.Exit(1); }
@@ -268,89 +424,6 @@ namespace Total.WinFCU
             }
             catch (Exception ex) { total.Logger.Fatal("Error processing Security settings.\n", ex); Environment.Exit(1); }
 */
-            // --------------------------------------------------------------------------------------------------------------------
-            //   XML query for RunOptions, get them all. Re-apply the commandline settings afterwards
-            // --------------------------------------------------------------------------------------------------------------------
-            total.Logger.Debug("Loading Run options");
-            total.APP.Debug = false; total.APP.Dryrun = false;
-            string runQuery = String.Format(xmlTransNode, "configuration") +
-                              String.Format(xmlTransNode, "applicationsettings") +
-                              String.Format(xmlTransNode, "runoptions");
-            try
-            {
-                foreach (XmlAttribute attribute in fcu.fcuConfig.SelectSingleNode(runQuery).Attributes)
-                {
-                    string defValue = attribute.Name.ToLower();
-                    switch (defValue) {
-                        case "debug":             total.APP.Debug  = attribute.Value.ToLower() == "true"; break;
-                        case "dryrun":            total.APP.Dryrun = attribute.Value.ToLower() == "true"; break;
-                        case "parallelschedules": parallelSchedules = attribute.Value.ToLower() == "true"; break;
-                        default:                  total.Logger.Error("Invalid RunOption setting " + defValue + " detected, terminating process"); Environment.Exit(1); break ;
-                    }
-                }
-                if (cli.IsPresent("Dryrun")) { total.APP.Dryrun = Convert.ToBoolean(cli.GetValue("Dryrun")); }
-                if (cli.IsPresent("Debug"))  { total.APP.Debug  = Convert.ToBoolean(cli.GetValue("Debug")); }
-                if (total.APP.Debug) { total.Log4netSetRootLevel(Level.Debug); } else { total.Log4netSetRootLevel(Level.Info); }
-            }
-            catch (Exception ex) { total.Logger.Fatal("Error processing Defaults settings.\n", ex); Environment.Exit(1); }
-            // --------------------------------------------------------------------------------------------------------------------
-            //   XML query for Defaults, get them all (which are inheritable attributes!).
-            // --------------------------------------------------------------------------------------------------------------------
-            total.Logger.Debug("Loading Defaults section");
-            // Non-inheritable
-            defAttributes.actionName         = "";
-            defAttributes.actionTarget       = "";
-            defAttributes.fileName           = "";
-            // Inheritable
-            defAttributes.excludeFromScan    = new Regex("#NONE#", RegexOptions.IgnoreCase);
-            defAttributes.deleteEmptyFolders = false;
-            defAttributes.fileAge            = "10";
-            defAttributes.checkType          = 'm';
-            defAttributes.forceOverWrite     = false;
-            defAttributes.processHiddenFiles = false;
-            defAttributes.recursiveScan      = false;
-            defAttributes.archivePath        = "None";
-            defAttributes.scheduleName       = "#ALL#";
-            defAttributes.systemName         = new Regex(".*", RegexOptions.IgnoreCase);
-            string defQuery = String.Format(xmlTransNode, "configuration") +
-                              String.Format(xmlTransNode, "applicationsettings") +
-                              String.Format(xmlTransNode, "defaults");
-            try
-            {
-                foreach (XmlAttribute attribute in fcu.fcuConfig.SelectSingleNode(defQuery).Attributes)
-                {
-                    string defValue = attribute.Name;
-                    switch (defValue.ToLower())
-                    {
-                        case "deleteemptyfolders": defAttributes.deleteEmptyFolders = Convert.ToBoolean(attribute.Value); break;
-                        case "age":                defAttributes.fileAge            = attribute.Value; break;
-                        case "check":              defAttributes.checkType          = attribute.Value.ToLower()[0]; break;
-                        case "forceoverwrite":     defAttributes.forceOverWrite     = Convert.ToBoolean(attribute.Value); break;
-                        case "processhiddenfiles": defAttributes.processHiddenFiles = Convert.ToBoolean(attribute.Value); break;
-                        case "recursive":          defAttributes.recursiveScan      = Convert.ToBoolean(attribute.Value); break;
-                        case "archivepath":        defAttributes.archivePath        = attribute.Value; break;
-                        case "schedule":           defAttributes.scheduleName       = attribute.Value; break;
-                        case "system":             defAttributes.systemName         = new Regex(attribute.Value, RegexOptions.IgnoreCase); break;
-                        case "exclude":            defAttributes.excludeFromScan    = new Regex(attribute.Value, RegexOptions.IgnoreCase); break;
-                        default: total.Logger.Error("Invalid Defaults setting \"" + defValue + "\" detected, terminating process"); Environment.Exit(1); break;
-                    }
-                }
-            }
-            catch (Exception ex) { total.Logger.Fatal("Error processing Defaults settings.\n", ex); Environment.Exit(1); }
-            // --------------------------------------------------------------------------------------------------------------------
-            //   File age check type can only be 'c' (Created) or 'm' (Modified) - Quit if something else is specified
-            // --------------------------------------------------------------------------------------------------------------------
-            ValidateFileCheck(defAttributes.checkType, "Defaults");
-            // --------------------------------------------------------------------------------------------------------------------
-            //   The logFile is no longer a RunOption, this is now done by log4net. So ask log4net for its name!
-            // --------------------------------------------------------------------------------------------------------------------
-            foreach (IAppender l4nAppender in (total.Logger.Logger.Repository.GetAppenders()))
-            {
-                Type t = l4nAppender.GetType();
-                if (!t.Equals(typeof(FileAppender)) & !t.Equals(typeof(RollingFileAppender))) { continue; }
-                fcu.runLogFile = ((FileAppender)l4nAppender).File;
-                break;
-            }
             // --------------------------------------------------------------------------------------------------------------------
             //   If schedules are defined, create a combined schedule object. Additional requests are appended
             //   Build the XML query for the scheduler settings, and get them all. Clear existing schedules before adding new
@@ -385,7 +458,7 @@ namespace Total.WinFCU
                             default: total.Logger.Error("Invalid schedule attribute \"" + schAttribute.Name + "\" found in " + schNode.OuterXml); break;
                         }
                     }
-                    if ((schSystem == null) || (Regex.Match(total.ENV.Server, schSystem).Success)) { runHasSchedule = evtSch.AddSchedule(schName, schDays, schStart, schEnd, schInterval, schSystem); }
+                    if ((String.IsNullOrEmpty(schSystem)) || (Regex.Match(total.ENV.Server, schSystem, RegexOptions.IgnoreCase).Success)) { runHasSchedule = evtSch.AddSchedule(schName, schDays, schStart, schEnd, schInterval, schSystem); }
                 }
                 if (runHasSchedule) { evtSch.CreateRunList(); }
             }
@@ -399,80 +472,6 @@ namespace Total.WinFCU
                                  String.Format(xmlTransNode, "folders");
             try { fcu.fcuFolders = fcu.fcuConfig.SelectNodes(folderQuery); }
             catch (Exception ex) { total.Logger.Fatal("Error processing Folders section.\n", ex); Environment.Exit(1); }
-            // --------------------------------------------------------------------------------------------------------------------
-            //   Finally; the query for Include, one or more configuration files can be loaded.
-            // --------------------------------------------------------------------------------------------------------------------
-            total.Logger.Debug("Loading Include file(s)");
-            string incFileLoading = "";
-            string incQuery = String.Format(xmlTransNode, "configuration") +
-                              String.Format(xmlTransNode, "applicationsettings") +
-                              String.Format(xmlTransNode, "includefiles") + 
-                              String.Format(xmlTransNode, "add");
-            try
-            {
-                fcu.incConfig.Clear();
-                foreach (XmlElement incNode in fcu.fcuConfig.SelectNodes(incQuery))
-                {
-                    string includePath = ""; string includeFile = "";
-                    foreach (XmlAttribute incAttribute in incNode.Attributes)
-                    {
-                        switch (incAttribute.Name.ToLower())
-                        {
-                            case "path": includePath = incAttribute.Value; break;
-                            default: total.Logger.Error("Invalid attribute \"" + incAttribute.Name + "\" found in includeFiles"); break;
-                        }
-                    }
-                    if (includePath.Length == 0) { total.Logger.Warn("No includeFiles path specified."); return; }
-                    includePath = fcu.ReplaceKeyword(includePath);
-                    if (!Path.IsPathRooted(includePath)) { includePath = Path.Combine(total.APP.Path, includePath); }
-                    includeFile = Path.GetFileName(includePath);
-                    if (includeFile.Length == 0) { includeFile = "*.config"; }
-                    includePath = Path.GetDirectoryName(includePath);
-                    DirectoryInfo incDirInfo = new DirectoryInfo(includePath);
-                    if (!incDirInfo.Exists) { total.Logger.Warn("Specified includeFiles path does not exist."); }
-                    else
-                    {
-                        fcu.includePaths.Add(Path.Combine(includePath, includeFile));
-                        FileInfo[] incFileInfo = incDirInfo.GetFiles(includeFile);
-                        foreach (FileInfo incFile in incFileInfo)
-                        {
-                            incFileLoading = incFile.FullName;
-                            fcu.incConfig.Add(incFileLoading);
-                            total.Logger.Debug("Processing include file " + incFileLoading);
-                            XmlDocument incConfig = new XmlDocument();
-                            // ----------------------------------------------------------------------------------------------------
-                            //  The config file might still be locked due to whatever reason.
-                            //  So if we get an (IO)Exception - try again after 1 sec.
-                            // ----------------------------------------------------------------------------------------------------
-                            loadAttempt = 0;
-                            while (true)
-                            {
-                                try { incConfig.Load(incFileLoading); break; }
-                                catch (Exception ex)
-                                {
-                                    if (++loadAttempt > 4)
-                                    {
-                                        total.Logger.Fatal("Error loading config file " + incFileLoading + "\n", ex);
-                                        Environment.Exit(1);
-                                    }
-                                    else { System.Threading.Thread.Sleep(1000); }
-                                }
-                            }
-                            // ----------------------------------------------------------------------------------------------------
-                            //  The config file is loaded, process its content
-                            // ----------------------------------------------------------------------------------------------------
-                            fcuNodeList = incConfig.SelectNodes(foldersQuery);
-                            foreach (XmlElement fcuNode in fcuNodeList) { fcuNode.SetAttribute("configname", incFile.Name); }
-                            foreach (XmlNode node in incConfig.DocumentElement.ChildNodes)
-                            {
-                                XmlNode imported = fcu.fcuConfig.ImportNode(node, true);
-                                fcu.fcuConfig.DocumentElement.AppendChild(imported);
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex) { total.Logger.Fatal("Error processing include file \"" + incFileLoading + "\"", ex); Environment.Exit(1); }
             // --------------------------------------------------------------------------------------------------------------------
             //   Lets put all info into the prcInfo string so it will be written to the logfile when the config is (re)loaded
             // --------------------------------------------------------------------------------------------------------------------
@@ -516,7 +515,6 @@ namespace Total.WinFCU
             foreach (XmlElement folderSet in fcu.fcuFolders)
             {
                 if (folderSet.GetType() != typeof(XmlElement)) { continue; }
-                total.Logger.Info("Processing files from: " + folderSet.GetAttribute("configname"));
                 // ----------------------------------------------------------------------------------------------------------------
                 //   Create and initialize a structure which holds all attributes for a folderset. Initializing is done via
                 //   inheritance of the default attributes structure. This structure in turn  will be inherited by all folders
@@ -533,7 +531,6 @@ namespace Total.WinFCU
                 {
                     switch (attribute.Name.ToLower())
                     {
-                        case "configname":         break;
                         case "deleteemptyfolders": folderSetAttr.deleteEmptyFolders = Convert.ToBoolean(folderSet.GetAttribute(attribute.Name)); break;
                         case "exclude":            folderSetAttr.excludeFromScan    = new Regex(fcu.ReplaceKeyword(folderSet.GetAttribute(attribute.Name)), RegexOptions.IgnoreCase); break;
                         case "age":                folderSetAttr.fileAge            = folderSet.GetAttribute(attribute.Name); break;
@@ -550,7 +547,7 @@ namespace Total.WinFCU
                     }
                 }
                 ValidateFileCheck(folderSetAttr.checkType, "<Folders>");
-                if (folderSetAttr.scheduleName == "") { folderSetAttr.scheduleName = scheduleName; }
+                if (String.IsNullOrEmpty(folderSetAttr.scheduleName)) { folderSetAttr.scheduleName = scheduleName; }
                 if ((scheduleName != defAttributes.scheduleName) && (folderSetAttr.scheduleName != scheduleName)) { continue; }
                 if (!folderSetAttr.systemName.Match(total.ENV.Server).Success) { continue; }
                 //if (total.LoggerIsDebugEnabled) { ShowFolderAttributes(folderSetAttr); }
@@ -599,7 +596,7 @@ namespace Total.WinFCU
                     // ------------------------------------------------------------------------------------------------------------
                     //   Now we have all active attributes for this path. Again check server & schedule
                     // ------------------------------------------------------------------------------------------------------------
-                    if (folderAttr.scheduleName == "") { folderAttr.scheduleName = scheduleName; }
+                    if (String.IsNullOrEmpty(folderAttr.scheduleName)) { folderAttr.scheduleName = scheduleName; }
                     if ((scheduleName != defAttributes.scheduleName) && (folderAttr.scheduleName != scheduleName)) { continue; }
                     if (!folderAttr.systemName.Match(total.ENV.Server).Success) { continue; }
                     total.Logger.Debug("Processing Path: " + scanPath);
@@ -727,8 +724,8 @@ namespace Total.WinFCU
                                 folder_bytesMoved = 0;
                                 switch (fileAttr.actionName.ToLower())
                                 {
-                                    case "compact":   fcu.CompactFilesInList(fcuFiles, fileAttr); break;
-                                    case "delete":    fcu.DeleteFilesInList(fcuFiles, fileAttr); break;
+                                    case "compact":   fcu.CompactFilesInList(fcuFiles); break;
+                                    case "delete":    fcu.DeleteFilesInList(fcuFiles); break;
                                     case "move":      fcu.MoveFilesInList(fcuFiles, fileAttr); break;
                                     case "archive":   fcu.ArchiveFilesInList(fcuFiles, fileAttr); break;
                                     default: total.Logger.Error("Invalid action \"" + fileAttr.actionName + "\" found for " + scanPath); break;
@@ -861,5 +858,68 @@ namespace Total.WinFCU
             }
             catch (Exception ex) { total.Logger.Error("Failed to empty the recycle bins, must be done manually!\n", ex); total.Logger.Info(new string('-', 80)); }
         }
+
+        // ------------------------------------------------------------------------------------------------------------------------
+        //   Invoke a PowerShell command/script and return the results as a list of strings
+        // ------------------------------------------------------------------------------------------------------------------------
+        public static List<string> InvokePowerShell(string psScript)
+        {
+            List <string> psResults = new List<string>();
+            using (PowerShell PowerShellInstance = PowerShell.Create())
+            {
+                // prepare the execution pipeline
+                PowerShellInstance.AddScript(psScript);
+                // invoke execution on the pipeline (collecting output)
+                Collection<PSObject> PSOutput = PowerShellInstance.Invoke();
+                PowerShellInstance.Dispose();
+                // loop through each output object item
+                foreach (PSObject outputItem in PSOutput)
+                {
+                    // if null object was dumped to the pipeline during the script then a null
+                    // object may be present here. check for null to prevent potential NRE.
+                    if (outputItem != null)
+                    {
+                        //TODO: do something with the output item 
+                        // outputItem.BaseOBject
+                        psResults.Add(outputItem.BaseObject.ToString());
+                    }
+                }
+            }
+            return psResults;
+        }
+
+        // ------------------------------------------------------------------------------------------------------------------------
+        //   Load the given config file intpo an XmlDocument. Max 4 attempts before failing
+        // ------------------------------------------------------------------------------------------------------------------------
+        private static XmlDocument LoadXmlDocument(string configFileName)
+        {
+            XmlDocument xmlDocument = new XmlDocument();
+            Exception loadException = new Exception();
+            int loadAttempt = 0;
+            // ----------------------------------------------------------------------------------------------------
+            //   Try loading the file, catch any exception
+            // ----------------------------------------------------------------------------------------------------
+            while (loadAttempt < 4)
+            {
+                try { xmlDocument.Load(configFileName); break; }
+                catch (Exception ex)
+                {
+                    loadAttempt += 1;
+                    loadException = ex;
+                    total.Logger.Debug(" - problem loading include file, retry attempt #" + loadAttempt + "\n", loadException);
+                    System.Threading.Thread.Sleep(1000);
+                }
+            }
+            // ----------------------------------------------------------------------------------------------------
+            //   Failed to load the file? Then say so and quit. Else return its content as an Xml Document
+            // ----------------------------------------------------------------------------------------------------
+            if (loadAttempt >= 4)
+            {
+                total.Logger.Fatal("Fatal error loading include file " + configFileName + "\n", loadException);
+                Environment.Exit(1);
+            }
+            return xmlDocument;
+        }
+
     }
 }

@@ -20,9 +20,10 @@ namespace Total.WinFCU
             //    Create a list of available folders
             // --------------------------------------------------------------------------------------------------------------------
             try { allFolders = Directory.GetDirectories(scanPath, "*", recursiveScan); }
-            catch (System.IO.DirectoryNotFoundException exDNF) { total.Logger.Debug(exDNF.Message); return; }
-            catch (System.UnauthorizedAccessException exUAE) { total.Logger.Debug(exUAE.Message); return; }
-            catch (System.ArgumentException exAE) { total.Logger.Debug(exAE.Message.TrimEnd('.') + " \"" + scanPath + "\""); return; }
+            catch (PathTooLongException exPTL) { total.Logger.Debug(exPTL.Message + " - " + scanPath); return; }
+            catch (DirectoryNotFoundException exDNF) { total.Logger.Debug(exDNF.Message); return; }
+            catch (UnauthorizedAccessException exUAE) { total.Logger.Debug(exUAE.Message); return; }
+            catch (ArgumentException exAE) { total.Logger.Debug(exAE.Message.TrimEnd('.') + " \"" + scanPath + "\""); return; }
             // --------------------------------------------------------------------------------------------------------------------
             //   Process the list of available folders (sort the list and start with the longest path name)
             // --------------------------------------------------------------------------------------------------------------------
@@ -31,12 +32,14 @@ namespace Total.WinFCU
             {
                 if (excludeFolder.Match(pathName).Success) { total.Logger.Info("Excluding path: " + pathName); continue; }
                 bool dirDeleted = true;
-                DirectoryInfo dirInfo = new DirectoryInfo(pathName);
+                DirectoryInfo dirInfo = null;
+                try { dirInfo = new DirectoryInfo(pathName); }
+                catch (PathTooLongException exPTL) { total.Logger.Debug(exPTL.Message + " - " + pathName); return; }
                 if (total.APP.Dryrun) { total.Logger.Debug(" [DRYRUN] - would remove folder: " + pathName); }
                 else
                 {
                     try { dirInfo.Delete(false); }
-                    catch (System.IO.IOException) { dirDeleted = false; }
+                    catch (IOException) { dirDeleted = false; }
                     if (dirDeleted) { total.Logger.Debug("Removed folder " + pathName); }
                 }
             }
@@ -45,7 +48,7 @@ namespace Total.WinFCU
         // ------------------------------------------------------------------------------------------------------------------------
         //   Delete all files in the specified FileInfo list (verify that file still exists! might be removed by external source)
         // ------------------------------------------------------------------------------------------------------------------------
-        public static void DeleteFilesInList(List<FileInfo> fileList, scanAttributes fnAttr)
+        public static void DeleteFilesInList(List<FileInfo> fileList)
         {
             foreach (FileInfo file in fileList)
             {
@@ -76,7 +79,7 @@ namespace Total.WinFCU
         // ------------------------------------------------------------------------------------------------------------------------
         //   Compact all files in the specified FileInfo list (verify that file still exists! might be removed by external source)
         // ------------------------------------------------------------------------------------------------------------------------
-        public static void CompactFilesInList(List<FileInfo> fileList, scanAttributes fnAttr)
+        public static void CompactFilesInList(List<FileInfo> fileList)
         {
             foreach (FileInfo file in fileList)
             {
@@ -99,7 +102,7 @@ namespace Total.WinFCU
                     total.Logger.Info("compacted file: " + file.FullName + "  (" + fileLengthBefore + "/" + fileLengthAfter + ")");
                 }
                 folder_bytesCompacted += (fileLengthBefore - fileLengthAfter);
-                folder_CompationRatio  = folder_CompationRatio + (fileLengthBefore / fileLengthAfter);
+                folder_CompationRatio += (fileLengthBefore / fileLengthAfter);
             }
             total_bytesZipped += folder_bytesZipped;
             if (total.APP.Dryrun) { total.Logger.Info(" [DRYRUN] - would have compressed " + folder_bytesCompacted + " bytes in folder " + INF.filePath); }
@@ -111,7 +114,6 @@ namespace Total.WinFCU
         // ------------------------------------------------------------------------------------------------------------------------
         public static void MoveFilesInList(List<FileInfo> fileList, scanAttributes fnAttr)
         {
-            int fpLength = INF.filePath.Length + 1;
             foreach (FileInfo file in fileList)
             {
                 if (!File.Exists(file.FullName)) { continue; }
@@ -185,7 +187,6 @@ namespace Total.WinFCU
             //   Convert the input file list to a sorted list with the archive target as key, the value part of the sorted list
             //   holds all filenames for the archive target.
             // --------------------------------------------------------------------------------------------------------------------
-            decimal folder_ZipRatio = 0;
             SortedList<string, List<string>> archiveSet = new SortedList<string, List<string>>();
             // --------------------------------------------------------------------------------------------------------------------
             //  Process all files in the list
@@ -208,8 +209,7 @@ namespace Total.WinFCU
                 catch
                 {
                     total.Logger.Debug("Collecting files for archive \"" + archive + "\"");
-                    List<string> archiveList = new List<string>();
-                    archiveList.Add(inFile.FullName);
+                    List<string> archiveList = new List<string>() { inFile.FullName };
                     archiveSet.Add(archive, archiveList);
                 }
             }
@@ -245,7 +245,7 @@ namespace Total.WinFCU
                     }
                 }
                 archiveList.Clear();
-                folder_ZipRatio = folder_bytesDeleted > 0 ? Math.Round((decimal)100 * folder_bytesArchived / folder_bytesDeleted, 1) : -1;
+                decimal folder_ZipRatio = folder_bytesDeleted > 0 ? Math.Round((decimal)100 * folder_bytesArchived / folder_bytesDeleted, 1) : -1;
                 total_bytesArchived += folder_bytesArchived;
                 total_bytesDeleted  += folder_bytesDeleted;
                 total.Logger.Debug("Archive results (D/A/R) for folder \"" + INF.filePath + "\" - " + folder_bytesDeleted + "/" + folder_bytesArchived + "/" + folder_ZipRatio);

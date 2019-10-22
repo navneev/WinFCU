@@ -31,7 +31,7 @@ namespace Total.WinFCU
         public static bool         runHasSchedule { get { return run_HasSchedule; } set { run_HasSchedule = value; } } private static bool         run_HasSchedule;
         public static string       runLogFile     { get { return run_LogFile; }     set { run_LogFile = value; } }     private static string       run_LogFile;
         public static string       runConfig      { get { return run_Config; }      set { run_Config = value; } }      private static string       run_Config;
-        public static List<String> incConfig      { get { return inc_Config; }      set { inc_Config = value; } }      private static List<String> inc_Config = new List<String>();
+        public static List<String> includeFiles   { get { return inc_Files; }       set { inc_Files = value; } }       private static List<String> inc_Files = new List<String>();
         // Security stuff
         public static string       secAccount     { get { return sec_account; }     set { sec_account = value; } }     private static string       sec_account;
         public static string       secPassword    { get { return sec_password; }    set { sec_password = value; } }    private static string       sec_password;
@@ -41,8 +41,8 @@ namespace Total.WinFCU
         public static XmlNodeList  fcuFolders     { get { return fcu_folders; }     set { fcu_folders = value; } }     private static XmlNodeList  fcu_folders;
         // restricted paths
         public static List<string> restrictedPaths = new List<string>();
-        // include paths
-        public static List<string> includePaths    = new List<string>();
+        // FileSystemWatcher targets
+        public static List<string> fswTargets      = new List<string>();
 
         public struct scanAttributes
         {
