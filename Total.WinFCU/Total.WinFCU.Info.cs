@@ -168,6 +168,7 @@ Copyright (C) 2016-{1} Hans van Veen, Total Productions
             prcInfo += String.Format("  - Process ID           : {0,-12}- ParentID             : {1}\r\n", total.PRC.ProcessID, total.PRC.ParentID);
             prcInfo += String.Format("  - Logon Type           : {0,-12}- Logon Type Name      : {1}\r\n", total.PRC.Type, total.PRC.TypeName);
             prcInfo += String.Format("  - x64bit OS            : {0,-12}- x64bit Mode          : {1}\r\n", total.ENV.x64os, total.ENV.x64mode);
+            prcInfo += String.Format("  - longpathsenabled     : {0,-12}\r\n", total.SYS.longpathenabled);
 
             prcInfo += String.Format("\r\n WinFCU Runtime Options\r\n {0}\r\n", new string('-', 78));
             prcInfo += String.Format("  - Debug                : {0,-12}- Dryrun               : {1}\r\n", total.APP.Debug, total.APP.Dryrun);

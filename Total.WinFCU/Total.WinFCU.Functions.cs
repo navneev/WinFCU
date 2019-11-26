@@ -506,6 +506,7 @@ namespace Total.WinFCU
             total.Logger.Info(Header);
             if (EventLogInitialized) { evtLog.WriteEntry(startMessage); }
             total.Logger.Info(startMessage);
+            if (!total.SYS.longpathenabled) { total.Logger.Warn("System does not support long file paths (LongPathsEnabled)"); }
             total.Logger.Info(dash80);
             // --------------------------------------------------------------------------------------------------------------------
             // Clear counters before commencing

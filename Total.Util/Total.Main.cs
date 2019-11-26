@@ -7,6 +7,7 @@ using System.Net.NetworkInformation;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using System.Xml;
+using Microsoft.Win32;
 using log4net;
 using log4net.Appender;
 using log4net.Core;
@@ -61,7 +62,7 @@ namespace Total.Util
             APP.Dryrun        = false;
             // ====================================================================================================================
             //   Add Environment related variables
-            // .--------------------------------------------------------------------------------------------------------------------
+            // --------------------------------------------------------------------------------------------------------------------
             ENV.Server         = Environment.MachineName;
             ENV.FQDN           = System.Net.Dns.GetHostEntry(ENV.Server).HostName.ToUpper();
             ENV.Domain         = IPGlobalProperties.GetIPGlobalProperties().DomainName;
@@ -82,9 +83,14 @@ namespace Total.Util
             ENV.Tmp            = Environment.GetEnvironmentVariable("Tmp");
             ENV.x64os          = Environment.Is64BitOperatingSystem;
             ENV.x64mode        = Environment.Is64BitProcess;
-            // -----------------------------------------------------------------------------------------
+            // ====================================================================================================================
+            //   Add System related variables
+            // --------------------------------------------------------------------------------------------------------------------
+            RegistryKey lclmKey = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\FileSystem");
+            SYS.longpathenabled = (int)lclmKey.GetValue("LongPathsEnabled", "0") == 1;
+            // --------------------------------------------------------------------------------------------------------------------
             //   Some variables can return a null value. Validate and fix if necessary
-            // -----------------------------------------------------------------------------------------
+            // --------------------------------------------------------------------------------------------------------------------
             if (!Directory.Exists(ENV.System32Dir)) { ENV.System32Dir = ENV.WinDir + "\\System32"; }
             if (ENV.Temp == null) { ENV.Temp = ENV.SysDrive +"\\Tmp"; }
             if (ENV.Tmp  == null) { ENV.Tmp  = ENV.Temp; }
@@ -149,18 +155,19 @@ namespace Total.Util
                 // ----------------------------------------------------------------------------------------------------------------
                 //   Create a RollingLogfileAppender
                 // ----------------------------------------------------------------------------------------------------------------
-                RollingFileAppender rlfa = new RollingFileAppender();
-                rlfa.Name = APP.Name + "-RollingLogfileAppender";
-                rlfa.File = new PatternString(logFilename).Format();
-                rlfa.LockingModel = new FileAppender.MinimalLock();
-                rlfa.Layout = new PatternLayout(patternLayout);
-                rlfa.Threshold = logLevel;
+                RollingFileAppender rlfa = new RollingFileAppender
+                {
+                    Name = APP.Name + "-RollingLogfileAppender",
+                    File = new PatternString(logFilename).Format(),
+                    LockingModel = new FileAppender.MinimalLock(),
+                    Layout = new PatternLayout(patternLayout),
+                    Threshold = logLevel
+                };
                 rlfa.ActivateOptions();
                 // ----------------------------------------------------------------------------------------------------------------
                 //   Create a ManagedColoredConsoleAppender
                 // ----------------------------------------------------------------------------------------------------------------
-                ManagedColoredConsoleAppender mcca = new ManagedColoredConsoleAppender();
-                mcca.Name = APP.Name + "-ManagedColoredConsoleAppender";
+                ManagedColoredConsoleAppender mcca = new ManagedColoredConsoleAppender{ Name = APP.Name + "-ManagedColoredConsoleAppender" };
                 mcca.AddMapping(new ManagedColoredConsoleAppender.LevelColors { Level = Level.Fatal, ForeColor = ConsoleColor.Magenta, BackColor = ConsoleColor.Black });
                 mcca.AddMapping(new ManagedColoredConsoleAppender.LevelColors { Level = Level.Error, ForeColor = ConsoleColor.Red, BackColor = ConsoleColor.Black });
                 mcca.AddMapping(new ManagedColoredConsoleAppender.LevelColors { Level = Level.Warn, ForeColor = ConsoleColor.Yellow, BackColor = ConsoleColor.Black });
