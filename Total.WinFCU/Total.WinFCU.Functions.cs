@@ -442,6 +442,7 @@ namespace Total.WinFCU
                     string schName     = "";
                     string schDays     = "";
                     string schStart    = "";
+                    bool   schStrict   = true;
                     string schEnd      = "";
                     string schInterval = "";
                     string schSystem   = "";
@@ -452,13 +453,14 @@ namespace Total.WinFCU
                             case "name":      schName     = schAttribute.Value; break;
                             case "day":       schDays     = schAttribute.Value; break;
                             case "start":     schStart    = schAttribute.Value; break;
+                            case "strict":    schStrict   = (schAttribute.Value == "true"); break;
                             case "end":       schEnd      = schAttribute.Value; break;
                             case "interval":  schInterval = schAttribute.Value; break;
                             case "system":    schSystem   = schAttribute.Value; break;
                             default: total.Logger.Error("Invalid schedule attribute \"" + schAttribute.Name + "\" found in " + schNode.OuterXml); break;
                         }
                     }
-                    if ((String.IsNullOrEmpty(schSystem)) || (Regex.Match(total.ENV.Server, schSystem, RegexOptions.IgnoreCase).Success)) { runHasSchedule = evtSch.AddSchedule(schName, schDays, schStart, schEnd, schInterval, schSystem); }
+                    if ((String.IsNullOrEmpty(schSystem)) || (Regex.Match(total.ENV.Server, schSystem, RegexOptions.IgnoreCase).Success)) { runHasSchedule = evtSch.AddSchedule(schName, schDays, schStart, schEnd, schInterval, schSystem, schStrict); }
                 }
                 if (runHasSchedule) { evtSch.CreateRunList(); }
             }

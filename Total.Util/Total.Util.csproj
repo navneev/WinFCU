@@ -66,6 +66,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Total.Networking.cs" />
     <Compile Include="Total.Credentials.cs" />
     <Compile Include="Total.Common.cs" />
     <Compile Include="Total.CompressFiles.cs" />

@@ -21,10 +21,10 @@ namespace Total.Util
         // ------------------------------------------------------------------------------------------------------------------------
         //   Overloads for the public methods 
         // ------------------------------------------------------------------------------------------------------------------------
-        public Boolean AddSchedule(string Name, string Days, string Start) { return this.add_Schedule(Name, Days, Start, "", "", ".*"); }
-        public Boolean AddSchedule(string Name, string Days, string Start, string End) { return this.add_Schedule(Name, Days, Start, End, "", ".*"); }
-        public Boolean AddSchedule(string Name, string Days, string Start, string End = "", string Interval = "") { return this.add_Schedule(Name, Days, Start, End, Interval, ".*"); }
-        public Boolean AddSchedule(string Name, string Days, string Start, string End = "", string Interval = "", string Server = ".*") { return this.add_Schedule(Name, Days, Start, End, Interval, Server); }
+        public Boolean AddSchedule(string Name, string Days, string Start) { return this.add_Schedule(Name, Days, Start, "", "", ".*", true); }
+        public Boolean AddSchedule(string Name, string Days, string Start, string End = "") { return this.add_Schedule(Name, Days, Start, End, "", ".*", true); }
+        public Boolean AddSchedule(string Name, string Days, string Start, string End = "", string Interval = "") { return this.add_Schedule(Name, Days, Start, End, Interval, ".*", true); }
+        public Boolean AddSchedule(string Name, string Days, string Start, string End = "", string Interval = "", string Server = ".*", bool Strict = true) { return this.add_Schedule(Name, Days, Start, End, Interval, Server, Strict); }
 
         public Boolean ClearSchedules() { return this.clear_Schedules(); }
 
@@ -40,7 +40,7 @@ namespace Total.Util
         // ------------------------------------------------------------------------------------------------------------------------
         //   Private methods used by the overloads
         // ------------------------------------------------------------------------------------------------------------------------
-        private Boolean add_Schedule(string Name, string Days, string Start, string End, string Interval, string Server)
+        private Boolean add_Schedule(string Name, string Days, string Start, string End, string Interval, string Server, bool Strict)
         {
             if (this.Schedule == null) { this.Schedule = new SortedList(); }
             string regexTime = "^(?:0?[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$";
@@ -64,33 +64,45 @@ namespace Total.Util
             // --------------------------------------------------------------------------------------------------------------------
             // Verify wheter Start is a valid HH:MM time mask
             // --------------------------------------------------------------------------------------------------------------------
-            string startTime = "--:--";
             if (!Regex.Match(Start, regexTime, RegexOptions.IgnoreCase).Success) { total.Logger.Warn(Start + " is not a valid hh:mm start time"); return false; }
-            startTime = (DateTime.Parse(Start).ToString("HH:mm"));
+            string startTime = (DateTime.Parse(Start).ToString("HH:mm"));
+            // --------------------------------------------------------------------------------------------------------------------
+            //  Check whether we have a strict schedule ar that some delta has to be applied The delta is constructed from the
+            //  1st valid macaddress of the system. The delta will vary between 0 and 26 (minutes)
+            // --------------------------------------------------------------------------------------------------------------------
+            int _delta = 0;
+            if (!Strict)
+            {
+                string _macAddress = total.getMacAddresses()[0];
+                for (int i=0; i < 12; i += 2) { _delta += int.Parse(_macAddress.Substring(i, 2), NumberStyles.HexNumber); }
+                _delta /= 60;
+                total.Logger.Debug("Schedule " + Name + " will use a delta of " + _delta + " minutes (mac address: " + _macAddress + ")");
+            }
+            startTime = (DateTime.Parse(Start).AddMinutes(_delta).ToString("HH:mm"));
             // --------------------------------------------------------------------------------------------------------------------
             // If End is specified, an interval is manadtory - and v.v.
             // --------------------------------------------------------------------------------------------------------------------
             string endTime = "--:--";
-            if (End.Length > 0)
+            if (!string.IsNullOrEmpty(End))
             {
                 if (!Regex.Match(End, regexTime, RegexOptions.IgnoreCase).Success) { total.Logger.Warn(End + " is not a valid HH: MM end time"); return false; }
-                if (Interval.Length == 0) { Interval = "01:00"; total.Logger.Debug("Using default interval (" + Interval + ")"); }
+                if (string.IsNullOrEmpty(Interval)) { Interval = "01:00"; total.Logger.Debug("Using default interval (" + Interval + ")"); }
                 endTime = (DateTime.Parse(End).ToString("HH:mm"));
             }
             // --------------------------------------------------------------------------------------------------------------------
             // If Interval is specified, End is manadtory - and v.v.
             // --------------------------------------------------------------------------------------------------------------------
             string intTime = "--:--";
-            if (Interval.Length > 0)
+            if (!string.IsNullOrEmpty(Interval))
             {
                 if (!Regex.Match(Interval, regexTime, RegexOptions.IgnoreCase).Success) { total.Logger.Warn(Interval + " is not a valid HH: MM Interval time"); return false; }
-                if (End.Length == 0) { endTime = "23:59"; total.Logger.Debug("Using default end time (" + endTime + ")"); }
+                if (string.IsNullOrEmpty(End)) { endTime = "23:59"; total.Logger.Debug("Using default end time (" + endTime + ")"); }
                 intTime = (DateTime.Parse(Interval).ToString("HH:mm"));
             }
             // --------------------------------------------------------------------------------------------------------------------
             //  Lets save what we have and calculate the ruinlist and return
             // --------------------------------------------------------------------------------------------------------------------
-            this.Schedule[Name] = new Hashtable() { {"Mask", dayMask}, {"Start", startTime}, {"End", endTime}, {"Interval", intTime}, {"Server", Server} };
+            this.Schedule[Name] = new Hashtable() { {"Mask", dayMask}, {"Start", startTime}, {"End", endTime}, {"Interval", intTime}, {"Server", Server}, {"Strict", Strict}, {"Delta", _delta} };
             //this.new_ScheduleSchema();
             return (this.Schedule[Name] != null);
         }
@@ -115,25 +127,29 @@ namespace Total.Util
         {
             List<string> nameList = new List<string>();
             if (this.Schedule == null) { total.Logger.Debug("Nothing to show. No event schedules defined"); return; }
-            if (Names != "") { nameList = Names.Split(',').Cast<string>().ToList(); }
-            else { nameList = this.Schedule.Keys.Cast<string>().ToList(); }
+            if (string.IsNullOrEmpty(Names)) { nameList = this.Schedule.Keys.Cast<string>().ToList(); }
+            else { nameList = Names.Split(',').Cast<string>().ToList(); }
             foreach (string schKey in nameList)
             {
                 Hashtable thisSchedule = (Hashtable)this.Schedule[schKey];
-                string startTime = (string)thisSchedule["Start"];
-                string endTime = (string)thisSchedule["End"];
-                string intTime = (string)thisSchedule["Interval"];
-                BitArray dayMask = (BitArray)thisSchedule["Mask"];
+                string _startTime = (string)thisSchedule["Start"];
+                string _endTime   = (string)thisSchedule["End"];
+                string _intTime   = (string)thisSchedule["Interval"];
+                string _schServer = (string)thisSchedule["Server"];
+                bool   _schStrict = (bool)thisSchedule["Strict"];
+                int    _schDelta  = (int)thisSchedule["Delta"];
+                BitArray dayMask  = (BitArray)thisSchedule["Mask"];
 
-                Console.WriteLine("\r\nSchedule: " + schKey);
-                Console.WriteLine(new String('=', 33));
+                if (_schStrict) { Console.WriteLine("\r\nSchedule: " + schKey + "  (Strict)"); }
+                else { Console.WriteLine("\r\nSchedule: " + schKey + "  (Delta: " + _schDelta + " min.)"); }
+                Console.WriteLine(new String('=', 32));
                 Console.WriteLine("  Day    Start     Int.    End");
-                Console.WriteLine(String.Format(" {0}", new String('-', 32)));
+                Console.WriteLine(String.Format(" {0}", new String('-', 31)));
                 for (int i = 0; i < 7; i++)
                 {
                     if (!dayMask.Get(i)) { continue; }
                     string schDoW = DateTimeFormatInfo.CurrentInfo.AbbreviatedDayNames[i];
-                    Console.WriteLine("  " + schDoW + "    " + startTime + "    " + intTime + "   " + endTime);
+                    Console.WriteLine("  " + schDoW + "    " + _startTime + "    " + _intTime + "   " + _endTime);
                 }
                 Console.WriteLine();
             }
@@ -150,6 +166,7 @@ namespace Total.Util
                 string   endTime   = (string)thisSchedule["End"];
                 string   intTime   = (string)thisSchedule["Interval"];
                 BitArray dayMask   = (BitArray)thisSchedule["Mask"];
+                // Create the new schedule
                 for (int i = 0; i < 7; i++)
                 {
                     if (!dayMask.Get(i)) { continue; }
