@@ -74,9 +74,10 @@ namespace Total.Util
             if (!Strict)
             {
                 string _macAddress = total.getMacAddresses()[0];
-                for (int i=0; i < 12; i += 2) { _delta += int.Parse(_macAddress.Substring(i, 2), NumberStyles.HexNumber); }
+                total.Logger.Debug("Using mac address " + _macAddress + " as delta seed");
+                foreach (string _maValue in _macAddress.Split('-')) { _delta += Int32.Parse(_maValue); }
                 _delta /= 60;
-                total.Logger.Debug("Schedule " + Name + " will use a delta of " + _delta + " minutes (mac address: " + _macAddress + ")");
+                total.Logger.Debug("Schedule " + Name + " will use a delta of " + _delta + " minutes");
             }
             startTime = (DateTime.Parse(Start).AddMinutes(_delta).ToString("HH:mm"));
             // --------------------------------------------------------------------------------------------------------------------
